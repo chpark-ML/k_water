@@ -5,7 +5,7 @@ SERVICE_NAME_DEV = ${SERVICE_NAME}-dev
 SERVICE_NAME_DEV_MAC = ${SERVICE_NAME}-dev-mac
 
 # Set working & current path 
-DATA_PATH = /data/kwater
+DATA_PATH = /data/k_water
 WORKDIR_PATH = /opt/${SERVICE_NAME}
 CURRENT_PATH = $(shell pwd)
 

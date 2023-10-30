@@ -15,7 +15,7 @@ services:
     stdin_open: true
     volumes:
       - ${CURRENT_PATH}:${WORKDIR_PATH} 
-      - ${DATA_PATH}:/data/k_water
+      - ${DATA_PATH}:${DATA_PATH}
     working_dir: ${WORKDIR_PATH}
     build:
       target: ${TARGET_STAGE:-train}
