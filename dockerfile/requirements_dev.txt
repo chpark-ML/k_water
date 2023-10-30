@@ -11,8 +11,6 @@ mlflow
 omegaconf
 openpyxl
 pandas
-pydicom
-pylidc
 pylint
 pymongo
 pytest
