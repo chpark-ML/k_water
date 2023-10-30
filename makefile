@@ -1,11 +1,11 @@
 # Set service name
-SERVICE_NAME = railroad
+SERVICE_NAME = kwater
 SERVICE_NAME_BASE = ${SERVICE_NAME}-base
 SERVICE_NAME_DEV = ${SERVICE_NAME}-dev
 SERVICE_NAME_DEV_MAC = ${SERVICE_NAME}-dev-mac
 
 # Set working & current path 
-DATA_PATH = /data/railroad
+DATA_PATH = /data/kwater
 WORKDIR_PATH = /opt/${SERVICE_NAME}
 CURRENT_PATH = $(shell pwd)
 

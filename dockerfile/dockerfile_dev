@@ -43,7 +43,7 @@ RUN apt-get update && apt-get -y --no-install-recommends install \
 
 # pip
 RUN pip3 install --upgrade pip
-RUN pip3 install tensorflow==2.6.2
+# RUN pip3 install tensorflow==2.6.2
 RUN pip3 install torch==1.13.0+cu116 torchvision==0.14.0+cu116 -f https://download.pytorch.org/whl/torch_stable.html
 RUN pip3 --no-cache-dir install -r /requirements_dev.txt
 
