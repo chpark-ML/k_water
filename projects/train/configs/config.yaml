@@ -1,0 +1,38 @@
+# MLflow
+experiment_tool:
+  name: mlflow
+  enable: True
+  server_uri: http://14.36.254.3:5000
+  run_name: null
+  experiment_name: null
+
+# specify default training configuration
+defaults:
+  - trainer: default
+  - loader: default
+  - criterion: mape
+  - model: model
+  - optim: adamw
+  - scheduler: one_cycle_lr
+  - experiment_tool: mlflow
+
+run_modes:
+  - train
+  - val
+  - test
+
+hydra:
+  run:
+    dir: ./outputs/${experiment_tool.run_group}/${experiment_tool.run_name}
+  job:
+    chdir: True  # keep hydra = 1.1 change directory behavior
+
+seed: 1234
+
+debug: False
+
+# pretty print config at the start of the run using Rich library
+print_config: True
+
+# evaluate best checkpoint on a test dataloader if exists
+eval_best_ckpt: True
