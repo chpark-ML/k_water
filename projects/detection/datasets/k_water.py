@@ -1,209 +1,139 @@
+import os
 import random
-from typing import Union, Dict
+from typing import List, Dict, Optional, Sequence, Union
 
+import cv2
 import numpy as np
 import pandas as pd
+import torch
 from torch.utils.data import Dataset
+from torchvision import transforms
+from pycocotools.coco import COCO
+from PIL import Image
+from omegaconf import OmegaConf
 
 from projects.common.enums import RunMode
 import projects.common.constants as C
 import projects.detection.utils.augmentation as aug
 
 
-def _get_start_distance(mode: RunMode,
-                        val_type: str,
-                        window_length: int,
-                        history_length: int,
-                        test_input_length: int,
-                        rail_type: str = "curved",
-                        interval: int = 50) -> pd.DataFrame:
-    assert rail_type in C.RAIL_TYPES_TO_TRAIN
-    data = {'start_distance': [], 'rail_type': [], 'yaw_type': []}
-    if interval is None:
-        interval = 1
+def _get_df(mode: RunMode, dataset_info: dict):
+    dataset_size_scale_factor = dataset_info['dataset_size_scale_factor']
+    assert (dataset_size_scale_factor > 0.) and (dataset_size_scale_factor <= 1.)
+    
+    # get dataframe for each dataset
+    df = pd.read_csv("projects/database/image_info.csv")
 
-    if rail_type == 'both':
-        rail_type_list = C.RAIL_TYPES
+    # get fold indices depending on the "mode"
+    if mode == RunMode.TRAIN:
+        total_fold = dataset_info["total_fold"]
+        val_fold = dataset_info["val_fold"]
+        test_fold = dataset_info["test_fold"]
+        fold_indices_total = OmegaConf.to_container(total_fold, resolve=True)
+        fold_indices_val = OmegaConf.to_container(val_fold, resolve=True)
+        fold_indices_test = OmegaConf.to_container(test_fold, resolve=True)
+        fold_indices = [item for item in fold_indices_total if
+                        item not in fold_indices_val and item not in fold_indices_test]
+    elif mode == RunMode.VALIDATE:
+        val_fold = dataset_info["val_fold"]
+        fold_indices = OmegaConf.to_container(val_fold, resolve=True)
+    elif mode == RunMode.TEST:
+        test_fold = dataset_info["test_fold"]
+        fold_indices = OmegaConf.to_container(test_fold, resolve=True)
     else:
-        rail_type_list = [rail_type]
+        assert False, "fold selection did not work as intended."
 
-    for rail in rail_type_list:
-        # 아래 예시 주석은 다음 변수일 때 기대값입니다. (window length: 2500, histroy_length: 500)
-        for yaw in C.YAW_TYPES:
-            if mode == RunMode.TRAIN:
-                if val_type == 'pre':
-                    # e.g., [2500,...,7500]
-                    # window (2500~4999), ... ,(7500~9999)
-                    list_start_distance = list(range(window_length,
-                                                    C.PREDICT_START_INDEX - window_length + 1,
-                                                    interval))
-                elif val_type == 'post':
-                    # e.g., [0,...,5500]
-                    # window (0~2499), ... ,(5500~7999)
-                    list_start_distance = list(range(0,
-                                                    C.PREDICT_START_INDEX - window_length + history_length - window_length + 1,
-                                                    interval))  
-                elif val_type == 'wo':
-                    # e.g., [0,...,7500]
-                    # window (0~2499), ... ,(7500~9999)
-                    list_start_distance = list(range(0,
-                                                    C.PREDICT_START_INDEX - window_length + 1,
-                                                    interval))  
+    # get specific size of samples from each fold index
+    dfs = list()
+    for i_fold in fold_indices:
+        _df = df[df['fold'] == i_fold].copy()
 
-            elif mode == RunMode.VALIDATE:
-                if val_type == 'pre':
-                    # e.g, [0], window (0~2499)
-                    list_start_distance = [0]
-                elif val_type == 'post':
-                    # e.g, [7500], window (7500 ~ 9999)
-                    list_start_distance = [C.PREDICT_START_INDEX - window_length]
-                elif val_type == 'wo':
-                    # e.g, []
-                    list_start_distance = []
+        # scale dataset size for train dataset
+        _df = _df[:int(len(_df) * dataset_size_scale_factor)]
 
-            elif mode == RunMode.TEST:
-                # e.g., [9500] / window (9500 ~ 11999)
-                list_start_distance = [C.PREDICT_START_INDEX - history_length] 
+        # append dataframes
+        dfs.append(_df)
 
-            data['start_distance'].extend(list_start_distance)
-            data['rail_type'].extend([rail] * len(list_start_distance))
-            data['yaw_type'].extend([yaw] * len(list_start_distance))
+    df = pd.concat(dfs, ignore_index=True)
 
-    df = pd.DataFrame(data)
     return df
 
 
-def _get_df(use_df_lane=True) -> Dict[str, Dict[str, pd.DataFrame]]:
-    """ Loads all `.csv` from data path"""
-    dict_df_rail = dict()  # {'curved': {'30': df, '40': df, ...},
-                           #  'straight': {'30': df, '40': df, ...} }
-    for rail in C.RAIL_TYPES:  
-        drive_files = C.VIBRATION_DATA_CURVED if rail == "curved" else C.VIBRATION_DATA_STRAIGHT
-        df_lane = pd.read_csv(C.LANE_DATA_CURVED if rail == "curved" else C.LANE_DATA_STRAIGHT)
-        assert all(df_lane['Distance'].values * 4 == (df_lane['Distance'].values * 4).astype(int))
-        df_lane['Distance'] = (df_lane['Distance'] * 4).astype(int) # [0.00 ~ 2500.00] / [2500.25 ~ 2999.75] > [0 ~ 10000] / [10001 ~ 11999]
-        df_lane = df_lane.set_index(keys=['Distance'], inplace=False)
-
-        dict_df_yaw = dict()
-        for _dir in drive_files:
-            df_vib = pd.read_csv(_dir)
-            assert all(df_vib['Distance'].values * 4 == (df_vib['Distance'].values * 4).astype(int))
-            df_vib['Distance'] = (df_vib['Distance'] * 4).astype(int)
-            df_vib = df_vib.set_index(keys=['Distance'], inplace=False)
-
-            if use_df_lane:
-                df_concat = pd.concat([df_vib, df_lane], axis=1).sort_index(ascending=True)
-            else:
-                df_concat = df_vib.sort_index(ascending=True)
-            yaw = _dir.stem.split("_")[-1][1:]
-            dict_df_yaw[yaw] = df_concat
-
-        dict_df_rail[rail] = dict_df_yaw
-    return dict_df_rail
-
-
 class Compose:
-    def __init__(self, transform=None, mode: Union[str, RunMode] = 'train'):
+    def __init__(self, transforms=None, mode: Union[str, RunMode] = 'train'):
         assert mode in ['train', 'val', 'test']
-        if mode != 'train':
-            assert transform
         self.mode = mode
-        self.transform = transform
+        self.transforms = transforms
 
-    def __call__(self, x, y):
-        if self.mode == 'train':
-            # Apply transform
-            for f in self.transform:
-                x, y = f(x, y)
+    def __call__(self, x):
+        for f in self.transforms:
+            x= f(x)
 
-        return x, y
+        return x
         
 
-class RailroadDataset(Dataset):
+class KWATER(Dataset):
     def __init__(self,
                  mode: Union[str, RunMode],
-                 val_type: str,
-                 window_length: int,
-                 history_length: int,
-                 rail_type: str = "curved",
-                 interval: int = None, 
+                 dataset_info: dict = None,
                  augmentation: dict = None):
-        assert val_type in ["pre", "post", "wo"]
-        assert history_length < window_length
-        assert rail_type in C.RAIL_TYPES_TO_TRAIN
-
         self.mode: RunMode = RunMode(mode) if isinstance(mode, str) else mode
-        self.val_type = val_type
-        self.window_length = window_length 
-        self.history_length = history_length
-        self.test_input_length = window_length
-        if self.mode == RunMode.TEST and self.test_input_length < C.PREDICT_LENGHT:
-            self.test_input_length = C.PREDICT_LENGHT + self.history_length
-            assert self.test_input_length % 2 == 0
-            
-        self.interval = interval
-        self.num_channels = C.NUM_CHANNEL_MAPPER[rail_type]
+        self.dataset_info = dataset_info
+        self.df_data = _get_df(self.mode, self.dataset_info)
+        self.coco = COCO(C.TRAIN_DATA_ANNOT)
+        self.cat_ids = self.coco.getCatIds() # category id 반환
+        self.cats = self.coco.loadCats(self.cat_ids) # category id를 입력으로 category name, super category 정보 담긴 dict 반환
 
-        self.df_data = _get_df(use_df_lane=(rail_type!='both'))  # dictionary of dictionary for (rail type, yaw type)
-        self.df_index = _get_start_distance(mode=self.mode, val_type=self.val_type,
-                                            window_length=self.window_length,
-                                            history_length=self.history_length,
-                                            test_input_length=self.test_input_length,
-                                            rail_type=rail_type, interval=interval)
-
-        if self.mode == RunMode.TRAIN:
-            self.transform = Compose(transform=[
-                aug.GaussianSmoothing(p=augmentation['gaussian_smoothing']['p'],
-                                      num_channels=self.num_channels,
-                                      mode=augmentation['gaussian_smoothing']['mode'],
-                                      min_sigma=augmentation['gaussian_smoothing']['min_sigma'],
-                                      max_sigma=augmentation['gaussian_smoothing']['max_sigma'],
-                                      sigma_normal_scale=augmentation['gaussian_smoothing']['sigma_normal_scale']),
-                aug.RescaleTime(p=augmentation['rescale_time']['p'], 
-                                min_scale_factor=augmentation['rescale_time']['min_scale_factor'], 
-                                max_scale_factor=augmentation['rescale_time']['max_scale_factor']),
+        self.transforms = Compose(transforms=[
+            transforms.ToPILImage(),
+            # transforms.Resize((256, 256)),
+            transforms.ToTensor(),
             ])
     
     def __len__(self):
-        return len(self.df_index)
+        return len(self.df_data)
     
     def __getitem__(self, index: int) -> Dict[str, Union[np.ndarray, int]]:
         """
         Resize -> Windowing -> Additional data augmentation
         """
-        elem = self.df_index.iloc[index]
-
-        sd = elem['start_distance']
-        if self.interval is not None and self.mode == RunMode.TRAIN:
-            # Add stochasticity to starting distance.
-            # This should be controlled by another parameter, instead of directly using `interval`
-            # TODO: results in different tensor size across the batch sample.
-            max_shift_size = int(self.interval * 1.0)
-            sd += np.random.randint(low=0, high=max_shift_size)
-            sd = max(sd, self.df_index['start_distance'].max())
-        rail = elem['rail_type']
-        yaw = elem['yaw_type']
-        data = self.df_data[rail][yaw]
-
-        if self.mode == RunMode.TRAIN or self.mode == RunMode.VALIDATE:
-            x = data.loc[sd : sd+self.window_length-1].copy()
-            y = data.loc[sd : sd+self.window_length-1].loc[:, C.PREDICT_COLS].copy()
-            for col in C.PREDICT_COLS:
-                x.loc[self.history_length if self.mode == RunMode.VALIDATE else np.random.uniform(0, self.history_length):, col] = 0
-        elif self.mode == RunMode.TEST:
-            x = data.loc[sd : ].copy()
-            y = data.loc[sd : ].loc[:, C.PREDICT_COLS].copy()
-
-        x = np.transpose(x.values, axes=(1, 0)) # (channel, time)
-        y = np.transpose(y.values, axes=(1, 0)) # (4, time)
-
-        # Data augmentation
-        if self.mode == RunMode.TRAIN:
-            x, y = self.transform(x, y)
-
-        x = np.expand_dims(x, axis=(0)) # (1, channel, time)
-        y = np.expand_dims(y, axis=(0)) # (1, 4, time)
+        elem = self.df_data.iloc[index]
+        image_id = elem['img_id']
+        image_infos = self.coco.loadImgs(image_id)[0] # img id를 받아서 image info 반환
         
-        return {'x': x.astype('float32'),
-                'y': y.astype('float32'),
-                "yaw": C.YAW_MAPPER[yaw]}
+        # cv2 를 활용하여 image 불러오기(BGR -> RGB 변환 -> numpy array 변환 -> normalize(0~1))
+        images = cv2.imread(os.path.join(str(C.DATA_ROOT_PATH_TRAIN), image_infos['file_name']))
+        images = cv2.cvtColor(images, cv2.COLOR_BGR2RGB).astype(np.float32)
+        images /= 255.0 
+
+        # bounding boxes
+        ann_ids = self.coco.getAnnIds(imgIds=image_id)
+        annotations = self.coco.loadAnns(ann_ids)
+        num_objs = len(annotations)
+        boxes = []
+        for i in range(num_objs):
+            xmin = annotations[i]['bbox'][0]
+            ymin = annotations[i]['bbox'][1]
+            xmax = xmin + annotations[i]['bbox'][2]
+            ymax = ymin + annotations[i]['bbox'][3]
+            boxes.append([xmin, ymin, xmax, ymax])
+        boxes = torch.as_tensor(boxes, dtype=torch.float32)
+        
+        labels = torch.ones((num_objs,), dtype=torch.int64)
+        image_id = torch.tensor([image_id])
+        areas = []
+        for i in range(num_objs):
+            areas.append(annotations[i]['area'])
+        areas = torch.as_tensor(areas, dtype=torch.float32)
+        
+        # target in dictionary format
+        target = {}
+        target["image_id"] = image_id
+        target["boxes"] = boxes
+        target["labels"] = labels
+        target["area"] = areas
+
+        if self.transforms is not None:
+            images, target = self.transforms(images, target)
+
+        return images, target

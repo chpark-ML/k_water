@@ -1,13 +1,13 @@
 _target_: torch.utils.data.DataLoader
 
 dataset:
-  _target_: projects.detection.datasets.railroad.RailroadDataset
+  _target_: projects.detection.datasets.k_water.KWATER
   mode: train
-  val_type: pre  # [pre, post, wo]
-  window_length: 2500
-  history_length: 500
-  rail_type: curved  # [curved, straight, both]
-  interval: 30
+  dataset_info:
+    total_fold: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    val_fold: [ 8 ]
+    test_fold: [ 9 ]
+    dataset_size_scale_factor: 1.0
   augmentation:
     gaussian_smoothing:
       p: 0.5
@@ -15,11 +15,6 @@ dataset:
       min_sigma: 0.001
       max_sigma: 0.1
       sigma_normal_scale: 2.0
-    rescale_time:
-      p: 0.5
-      min_scale_factor: 1.0  # 작은 사이즈로 resize되고 zero padding하게되면 정의된 문제에 적당하지 않으므로, 1.0으로 세팅할 것.
-      max_scale_factor: 2.0
-
 
 batch_size: 4
 num_workers: 0
