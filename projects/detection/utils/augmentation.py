@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from scipy.ndimage import gaussian_filter1d
 
-import projects.DC_prediction.utils.constants as C
+import projects.common.constants as C
 
 
 class GaussianSmoothing:

@@ -12,12 +12,12 @@ import pandas as pd
 import tqdm
 from omegaconf import DictConfig, OmegaConf
 
-import projects.DC_prediction.utils.constants as C
-import projects.DC_prediction.utils.model_path as MP
-from projects.DC_prediction.train import _get_loaders_and_trainer
-from projects.DC_prediction.utils.enums import RunMode
-from projects.DC_prediction.utils.utils import set_config
-from projects.DC_prediction.utils.utils import (
+import projects.common.constants as C
+import projects.detection.utils.model_path as MP
+from projects.detection.train import _get_loaders_and_trainer
+from projects.common.enums import RunMode
+from projects.common.utils import set_config
+from projects.common.utils import (
     get_binary_classification_metrics, _seed_everything, print_config, set_config, get_torch_device_string)
 
 logging.basicConfig(level=logging.INFO)
@@ -122,7 +122,7 @@ def main() -> None:
                     target_col = f'{col}_{rail[0]}{yaw}'
                     df_ans.loc[:, target_col] = preds[C.YAW_MAPPER[yaw], 0, C.PREDICT_COL_MAPPER[col], -len(df_ans):].detach().cpu().numpy()
     
-    df_ans.to_csv('/opt/railroad/projects/DC_prediction/analysis/result_test.csv', index=False)
+    df_ans.to_csv('/opt/railroad/projects/detection/analysis/result_test.csv', index=False)
 
 if __name__ == '__main__':
     main()

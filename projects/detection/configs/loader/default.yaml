@@ -1,7 +1,7 @@
 _target_: torch.utils.data.DataLoader
 
 dataset:
-  _target_: projects.DC_prediction.datasets.railroad.RailroadDataset
+  _target_: projects.detection.datasets.railroad.RailroadDataset
   mode: train
   val_type: pre  # [pre, post, wo]
   window_length: 2500

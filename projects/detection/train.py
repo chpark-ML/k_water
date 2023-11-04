@@ -18,10 +18,10 @@ import tqdm
 from sklearn import metrics
 from torch.utils.data.distributed import DistributedSampler
 
-import projects.DC_prediction.utils.constants as C
-from projects.DC_prediction.utils import experiment_tool as et
-from projects.DC_prediction.utils.enums import RunMode
-from projects.DC_prediction.utils.utils import (
+import projects.common.constants as C
+from projects.detection.utils import experiment_tool as et
+from projects.common.enums import RunMode
+from projects.common.utils import (
     get_binary_classification_metrics, _seed_everything, print_config, set_config, get_torch_device_string)
 
 logger = logging.getLogger(__name__)

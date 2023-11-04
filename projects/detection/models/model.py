@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import projects.DC_prediction.utils.constants as C
-import projects.DC_prediction.models.modules as M
+import projects.common.constants as C
+import projects.detection.models.modules as M
     
 
 class RailModel(nn.Module):

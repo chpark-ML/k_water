@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import projects.DC_prediction.utils.constants as C
+import projects.common.constants as C
 
 
 class Classifier(nn.Module):

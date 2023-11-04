@@ -1,4 +1,4 @@
-cd /opt/railroad/projects/DC_prediction
+cd /opt/railroad/projects/detection
 
 BS=5
 

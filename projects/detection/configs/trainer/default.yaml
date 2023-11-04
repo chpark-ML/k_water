@@ -1,4 +1,4 @@
-_target_: projects.DC_prediction.train.Trainer
+_target_: projects.detection.train.Trainer
 
 gpus: auto
 max_epoch: 200

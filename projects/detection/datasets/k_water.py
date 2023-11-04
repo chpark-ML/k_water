@@ -5,9 +5,9 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import Dataset
 
-from projects.DC_prediction.utils.enums import RunMode
-import projects.DC_prediction.utils.constants as C
-import projects.DC_prediction.utils.augmentation as aug
+from projects.common.enums import RunMode
+import projects.common.constants as C
+import projects.detection.utils.augmentation as aug
 
 
 def _get_start_distance(mode: RunMode,

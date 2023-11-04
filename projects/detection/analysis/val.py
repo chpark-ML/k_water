@@ -12,12 +12,12 @@ import pandas as pd
 import tqdm
 from omegaconf import DictConfig, OmegaConf
 
-import projects.DC_prediction.utils.constants as C
-import projects.DC_prediction.utils.model_path as MP
-from projects.DC_prediction.train import _get_loaders_and_trainer
-from projects.DC_prediction.utils.enums import RunMode
-from projects.DC_prediction.utils.utils import set_config
-from projects.DC_prediction.utils.utils import (
+import projects.common.constants as C
+import projects.detection.utils.model_path as MP
+from projects.detection.train import _get_loaders_and_trainer
+from projects.common.enums import RunMode
+from projects.common.utils import set_config
+from projects.common.utils import (
     get_binary_classification_metrics, _seed_everything, print_config, set_config, get_torch_device_string)
 
 logging.basicConfig(level=logging.INFO)
@@ -131,8 +131,8 @@ def main() -> None:
                     new_df_y_pred.loc[:, target_col] = preds[C.YAW_MAPPER[yaw], 0, C.PREDICT_COL_MAPPER[col], :].detach().cpu().numpy()
                     new_df_annot.loc[:, target_col] = annots[C.YAW_MAPPER[yaw], 0, C.PREDICT_COL_MAPPER[col], :].detach().cpu().numpy()
     
-    new_df_y_pred.to_csv('/opt/railroad/projects/DC_prediction/analysis/result_val_pred.csv', index=False)
-    new_df_annot.to_csv('/opt/railroad/projects/DC_prediction/analysis/result_val_annot.csv', index=False)
+    new_df_y_pred.to_csv('/opt/railroad/projects/detection/analysis/result_val_pred.csv', index=False)
+    new_df_annot.to_csv('/opt/railroad/projects/detection/analysis/result_val_annot.csv', index=False)
 
 if __name__ == '__main__':
     main()

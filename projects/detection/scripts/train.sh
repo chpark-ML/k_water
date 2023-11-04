@@ -1,5 +1,5 @@
 gpu_num=0
-cd /opt/railroad/projects/DC_prediction
+cd /opt/railroad/projects/detection
 
 exp_name=det_test
 

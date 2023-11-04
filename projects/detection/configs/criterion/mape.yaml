@@ -1,4 +1,4 @@
-_target_: projects.DC_prediction.criterions.weighted_MAPE.WeightedMAPE
+_target_: projects.detection.criterions.weighted_MAPE.WeightedMAPE
 
 window_length: ${loader.dataset.window_length}
 history_length: ${loader.dataset.history_length}
