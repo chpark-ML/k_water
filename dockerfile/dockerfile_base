@@ -17,11 +17,19 @@ RUN rm -f /etc/apt/sources.list.d/*.list
 
 # Install some basic utilities
 RUN apt-get update && apt-get -y --no-install-recommends install \
-    sudo \
     python3.9 \
     python3-dev \
     python3-pip \
+    libgdcm-tools \
+    libglib2.0-0 \
+    libgl1-mesa-glx \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    sudo \
     git \
+    bzip2 \
+    libx11-6 \
  && rm -rf /var/lib/apt/lists/*
 
  # python3.9를 우선순위 1로 변경
