@@ -2,11 +2,12 @@ from pycocotools.cocoeval import COCOeval
 import json
 import torch
 
+from projects.common.enums import RunMode
+import projects.common.constants as C
+
 
 def evaluate_coco(dataset, model, threshold=0.05):
-    
     model.eval()
-    
     with torch.no_grad():
         # start collecting results
         results = []
@@ -17,6 +18,7 @@ def evaluate_coco(dataset, model, threshold=0.05):
             scale = data['scale']
             elem = dataset.df_data.iloc[index]
             image_id = elem['img_id']
+            img_path = elem['img_path']
 
             # run network
             if torch.cuda.is_available():
@@ -48,10 +50,17 @@ def evaluate_coco(dataset, model, threshold=0.05):
 
                     # append detection for each positively labeled class
                     image_result = {
+                        'id'          : box_id,
                         'image_id'    : image_id,
                         'category_id' : dataset.label_to_coco_label(label),
-                        'score'       : float(score),
+                        'segmentation': [],
+                        'area'        : 0,
                         'bbox'        : box.tolist(),
+                        'iscrowd'     : 0,
+                        'attributes'  : {
+                            "occluded": False,
+                            "rotation": 0.0
+                        }
                     }
 
                     # append detection to results
@@ -62,23 +71,27 @@ def evaluate_coco(dataset, model, threshold=0.05):
 
             # print progress
             print('{}/{}'.format(index, len(dataset)), end='\r')
-
-        if not len(results):
-            return
+        
+        # if not len(results):
+        #     return
 
         # write output
-        json.dump(results, open('{}_bbox_results.json'.format(dataset.mode), 'w'), indent=4)
+        with open(C.ANSWER_SAMPLE, 'r') as json_file:
+            json_data = json.load(json_file)
+            json_data.pop("annotations")
+        json_data["annotations"] = results
+        json.dump(results, open('{}_bbox_results.json'.format(dataset.mode.value), 'w'), indent=4)
 
         # load results in COCO evaluation tool
-        coco_true = dataset.coco
-        coco_pred = coco_true.loadRes('{}_bbox_results.json'.format(dataset.mode))
+        # coco_true = dataset.coco
+        # coco_pred = coco_true.loadRes('{}_bbox_results.json'.format(dataset.mode..value))
 
         # run COCO evaluation
-        coco_eval = COCOeval(coco_true, coco_pred, 'bbox')
-        coco_eval.params.imgIds = image_ids
-        coco_eval.evaluate()
-        coco_eval.accumulate()
-        coco_eval.summarize()
+        # coco_eval = COCOeval(coco_true, coco_pred, 'bbox')
+        # coco_eval.params.imgIds = image_ids
+        # coco_eval.evaluate()
+        # coco_eval.accumulate()
+        # coco_eval.summarize()
 
         model.train()
 

@@ -87,9 +87,17 @@ class KWATER(Dataset):
                  augmentation: dict = None):
         self.mode: RunMode = RunMode(mode) if isinstance(mode, str) else mode
         self.dataset_info = dataset_info
-        self.df_data = _get_df(self.mode, self.dataset_info)
-        self.coco = COCO(C.TRAIN_DATA_ANNOT)
-        self.load_classes()
+
+        if self.mode == RunMode.TRAIN or self.mode == RunMode.VALIDATE:
+            self.df_data = _get_df(self.mode, self.dataset_info)
+            self.coco = COCO(C.TRAIN_DATA_ANNOT)
+            self.load_classes()
+        elif self.mode == RunMode.TEST:
+            self.df_data = pd.DataFrame({
+                'img_id': [int(image_path.stem.split('_')[-1]) for image_path in C.TEST_DATA_IMAGE], 
+                'img_path': C.TEST_DATA_IMAGE,
+            })
+
 
         if self.mode == RunMode.TRAIN:
             self.transforms = Compose(transforms=[Normalizer(), Augmenter(), Resizer()])
@@ -107,8 +115,12 @@ class KWATER(Dataset):
         elem = self.df_data.iloc[index]
         image_id = elem['img_id']
 
-        images = self.load_image(image_id)
-        annotations = self.load_annotations(image_id)
+        if self.mode == RunMode.TEST:
+            images = self.load_image(image_id, elem['img_path'])
+            annotations = np.zeros((0, 5))
+        else:
+            images = self.load_image(image_id)
+            annotations = self.load_annotations(image_id)
         sample = {'img': images, 'annot': annotations}
 
         if self.transforms:
@@ -116,9 +128,12 @@ class KWATER(Dataset):
 
         return sample
 
-    def load_image(self, image_id):
-        image_info = self.coco.loadImgs([image_id])[0]
-        path       = os.path.join(os.path.join(str(C.DATA_ROOT_PATH_TRAIN), image_info['file_name']))
+    def load_image(self, image_id, image_path=None):
+        if image_path:
+            path = image_path
+        else:
+            image_info = self.coco.loadImgs([image_id])[0]
+            path       = os.path.join(os.path.join(str(C.DATA_ROOT_PATH_TRAIN), image_info['file_name']))
         img = skimage.io.imread(path)
 
         if len(img.shape) == 2:
@@ -251,16 +266,18 @@ class Resizer(object):
         new_image = np.zeros((rows + pad_w, cols + pad_h, cns)).astype(np.float32)
         new_image[:rows, :cols, :] = image.astype(np.float32)
 
-        annots[:, :4] *= scale
-
-        return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale}
+        if annots is not None:
+            annots[:, :4] *= scale
+            return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale}
+        else:
+            return {'img': torch.from_numpy(new_image), 'annot': None, 'scale': scale}
+        
 
 
 class Augmenter(object):
     """Convert ndarrays in sample to Tensors."""
 
     def __call__(self, sample, flip_x=0.5):
-
         if np.random.rand() < flip_x:
             image, annots = sample['img'], sample['annot']
             image = image[:, ::-1, :]

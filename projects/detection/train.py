@@ -378,9 +378,9 @@ class Trainer():
 
         # Test if possible
         test_metrics = None
-        if test_loader and epoch >= self.test_epoch_start:
-            test_metrics = self.test_epoch(epoch, test_loader)
-            self.log_metrics(RunMode.TEST.value, epoch, test_metrics, mlflow_log_prefix='EPOCH')
+        # if test_loader and epoch >= self.test_epoch_start:
+        #     test_metrics = self.test_epoch(epoch, test_loader)
+        #     self.log_metrics(RunMode.TEST.value, epoch, test_metrics, mlflow_log_prefix='EPOCH')
 
         # Save model and return metrics
         best_metrics, found_better = self.save_best_metrics(val_metrics, best_model_metrics, epoch)
@@ -436,12 +436,8 @@ class Trainer():
             logger.info(
                 'The best model path has never been updated, initial model has been used for testing.')
 
-        if RunMode.VALIDATE in loaders:
-            evaluate_coco(loaders[RunMode.VALIDATE].dataset, self.model, threshold=0.05)
-            best_model_test_metrics = self.validate_epoch(self.epoch_best_model, loaders[RunMode.VALIDATE])
-            self.log_metrics('checkpoint_val', None, best_model_test_metrics)
-
         if RunMode.TEST in loaders:
+            evaluate_coco(loaders[RunMode.TEST].dataset, self.model, threshold=0.05)
             best_model_test_metrics = self.test_epoch(self.epoch_best_model, loaders[RunMode.TEST])
             self.log_metrics('checkpoint_test', None, best_model_test_metrics)
 

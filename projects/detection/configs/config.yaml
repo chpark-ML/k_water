@@ -19,7 +19,7 @@ defaults:
 run_modes:
   - train
   - val
-  # - test
+  - test
 
 hydra:
   run:
