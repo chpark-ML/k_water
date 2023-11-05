@@ -8,4 +8,4 @@ HYDRA_FULL_ERROR=1 python3 main.py \
     experiment_tool.run_group=${exp_name} \
     experiment_tool.run_name=${exp_name} \
     trainer.gpus=${gpu_num} \
-    trainer.fast_dev_run=False
+    trainer.fast_dev_run=True

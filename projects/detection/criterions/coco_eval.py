@@ -8,7 +8,6 @@ def evaluate_coco(dataset, model, threshold=0.05):
     model.eval()
     
     with torch.no_grad():
-
         # start collecting results
         results = []
         image_ids = []
@@ -16,19 +15,21 @@ def evaluate_coco(dataset, model, threshold=0.05):
         for index in range(len(dataset)):
             data = dataset[index]
             scale = data['scale']
+            elem = dataset.df_data.iloc[index]
+            image_id = elem['img_id']
 
             # run network
             if torch.cuda.is_available():
-                scores, labels, boxes = model(data['img'].permute(2, 0, 1).cuda().float().unsqueeze(dim=0))
+                # input: (B, 3, 480, 640) / output: (B, 57600, 4), (B, 57600, 8), (B, 57600, 4)
+                scores, labels, boxes = model(data['img'].permute(2, 0, 1).cuda().float().unsqueeze(dim=0), mode="inference")  
             else:
-                scores, labels, boxes = model(data['img'].permute(2, 0, 1).float().unsqueeze(dim=0))
+                scores, labels, boxes = model(data['img'].permute(2, 0, 1).float().unsqueeze(dim=0), mode="inference")
             scores = scores.cpu()
             labels = labels.cpu()
             boxes  = boxes.cpu()
 
             # correct boxes for image scale
             boxes /= scale
-
             if boxes.shape[0] > 0:
                 # change to (x, y, w, h) (MS COCO standard)
                 boxes[:, 2] -= boxes[:, 0]
@@ -47,7 +48,7 @@ def evaluate_coco(dataset, model, threshold=0.05):
 
                     # append detection for each positively labeled class
                     image_result = {
-                        'image_id'    : dataset.image_ids[index],
+                        'image_id'    : image_id,
                         'category_id' : dataset.label_to_coco_label(label),
                         'score'       : float(score),
                         'bbox'        : box.tolist(),
@@ -57,7 +58,7 @@ def evaluate_coco(dataset, model, threshold=0.05):
                     results.append(image_result)
 
             # append image to list of processed images
-            image_ids.append(dataset.image_ids[index])
+            image_ids.append(image_id)
 
             # print progress
             print('{}/{}'.format(index, len(dataset)), end='\r')

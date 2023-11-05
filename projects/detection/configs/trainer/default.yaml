@@ -1,13 +1,13 @@
 _target_: projects.detection.train.Trainer
 
 gpus: auto
-max_epoch: 50
+max_epoch: 10
 test_epoch_start: ${trainer.max_epoch}
 fast_dev_run: False
 early_stop_patience: null
 use_amp: False
 resume_from_checkpoint: null
-log_every_n_steps: 1
+log_every_n_steps: 100
 
 benchmark: False
 deterministic: True

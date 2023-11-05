@@ -56,6 +56,7 @@ def _get_df(mode: RunMode, dataset_info: dict):
         _df = df[df['fold'] == i_fold].copy()
 
         # scale dataset size for train dataset
+        # TODO: shuffle
         _df = _df[:int(len(_df) * dataset_size_scale_factor)]
 
         # append dataframes
@@ -194,7 +195,7 @@ def collater(data):
     max_height = np.array(heights).max()
 
     padded_imgs = torch.zeros(batch_size, max_width, max_height, 3)
-
+    
     for i in range(batch_size):
         img = imgs[i]
         padded_imgs[i, :int(img.shape[0]), :int(img.shape[1]), :] = img
@@ -222,7 +223,7 @@ def collater(data):
 class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
 
-    def __call__(self, sample, min_side=608, max_side=1024):
+    def __call__(self, sample, min_side=480, max_side=1024):
         image, annots = sample['img'], sample['annot']
 
         rows, cols, cns = image.shape
@@ -231,6 +232,7 @@ class Resizer(object):
 
         # rescale the image so the smallest side is min_side
         scale = min_side / smallest_side
+        # scale = 0.9 + (1.1 - 0.9) * np.random.rand()
 
         # check if the largest side is now greater than max_side, which can happen
         # when images have a large aspect ratio
@@ -243,8 +245,8 @@ class Resizer(object):
         image = skimage.transform.resize(image, (int(round(rows*scale)), int(round((cols*scale)))))
         rows, cols, cns = image.shape
 
-        pad_w = 32 - rows%32
-        pad_h = 32 - cols%32
+        pad_w = 32 - rows%32 if rows%32 else 0
+        pad_h = 32 - cols%32 if cols%32 else 0
 
         new_image = np.zeros((rows + pad_w, cols + pad_h, cns)).astype(np.float32)
         new_image[:rows, :cols, :] = image.astype(np.float32)

@@ -195,7 +195,7 @@ class Trainer():
         start = time.time()
         for i, data in enumerate(train_loader):
             self.optimizer.zero_grad()
-            img_batch = data['img'].to(self.device)  # (B, 3, 640, 832)
+            img_batch = data['img'].to(self.device)  # (B, 3, 480, 640)
             annotations = data['annot'].to(self.device)  # (B, 1, 5) TODO 왜 모두 -1로 채워져있지?
             _check_any_nan(img_batch)
             _check_any_nan(annotations)
@@ -290,7 +290,7 @@ class Trainer():
                 # FIXME: progress bar does not update when 'fast_dev_run==True'
                 break
 
-        return torch.stack(losses).sum().item()
+        return torch.stack(losses).mean().item()
     
     @torch.no_grad()
     def validate_epoch(self, epoch, val_loader) -> Metrics:
@@ -435,6 +435,11 @@ class Trainer():
         else:
             logger.info(
                 'The best model path has never been updated, initial model has been used for testing.')
+
+        if RunMode.VALIDATE in loaders:
+            evaluate_coco(loaders[RunMode.VALIDATE].dataset, self.model, threshold=0.05)
+            best_model_test_metrics = self.validate_epoch(self.epoch_best_model, loaders[RunMode.VALIDATE])
+            self.log_metrics('checkpoint_val', None, best_model_test_metrics)
 
         if RunMode.TEST in loaders:
             best_model_test_metrics = self.test_epoch(self.epoch_best_model, loaders[RunMode.TEST])
