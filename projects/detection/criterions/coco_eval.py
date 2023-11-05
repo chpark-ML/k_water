@@ -80,7 +80,7 @@ def evaluate_coco(dataset, model, threshold=0.05):
             json_data = json.load(json_file)
             json_data.pop("annotations")
         json_data["annotations"] = results
-        json.dump(results, open('{}_bbox_results.json'.format(dataset.mode.value), 'w'), indent=4)
+        json.dump(json_data, open('{}_bbox_results.json'.format(dataset.mode.value), 'w'), indent=4)
 
         # load results in COCO evaluation tool
         # coco_true = dataset.coco
