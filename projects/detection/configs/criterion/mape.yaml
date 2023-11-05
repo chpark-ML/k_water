@@ -1,6 +1,0 @@
-_target_: projects.detection.criterions.weighted_MAPE.WeightedMAPE
-
-window_length: ${loader.dataset.window_length}
-history_length: ${loader.dataset.history_length}
-alpha_mse: 0.0
-max_epoch: ${trainer.max_epoch}

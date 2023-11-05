@@ -10,8 +10,8 @@ experiment_tool:
 defaults:
   - trainer: default
   - loader: default
-  - criterion: mape
-  - model: model
+  - criterion: focal_loss
+  - model: resnet50
   - optim: adamw
   - scheduler: one_cycle_lr
   - experiment_tool: mlflow

@@ -19,10 +19,12 @@ from sklearn import metrics
 from torch.utils.data.distributed import DistributedSampler
 
 import projects.common.constants as C
-from projects.detection.utils import experiment_tool as et
+from projects.detection.datasets.k_water import collater
+from projects.detection import experiment_tool as et
+from projects.detection.criterions.coco_eval import evaluate_coco
 from projects.common.enums import RunMode
-from projects.common.utils import (
-    get_binary_classification_metrics, _seed_everything, print_config, set_config, get_torch_device_string)
+from projects.detection.utils import (
+    _seed_everything, print_config, set_config, get_torch_device_string)
 
 logger = logging.getLogger(__name__)
 
@@ -61,17 +63,31 @@ def _get_loaders_and_trainer(config, optuna_trial=None):
     # Data Loaders
     logger.info(f"Instantiating dataloader <{config.loader._target_}>")
     run_modes = [RunMode(m) for m in config.run_modes] if 'run_modes' in config else [x for x in RunMode]
+    datasets = {mode: hydra.utils.instantiate(config.loader.dataset, mode=mode) 
+                for mode in run_modes}
     loaders = {mode: hydra.utils.instantiate(config.loader,
-                                                dataset={'mode': mode}, shuffle=(mode == RunMode.TRAIN),
-                                                drop_last=(mode == RunMode.TRAIN)) for mode in run_modes}
-
+                                             dataset=datasets[mode], 
+                                             collate_fn=collater,
+                                             shuffle=(mode == RunMode.TRAIN),
+                                             drop_last=(mode == RunMode.TRAIN)) for mode in run_modes}
+    
+    # Init model
+    if config.model.get('target_function') is not None:
+        logger.info(f'Instantiating model <{config.model.target_function}>')
+        target_function = hydra.utils.get_method(config.model.target_function)
+        config.model.pop('target_function')
+        model = target_function(**config.model)
+    else:
+        logger.info(f'Instantiating model <{config.model._target_}>')
+        model = hydra.utils.instantiate(config.model)
+    
+    # logging tool
+    logging_tool = et.load_logging_tool(config=config)
+    
     # Trainers
     module_name, _, trainer_class = config.trainer._target_.rpartition('.')
     module = importlib.import_module(module_name)
     class_ = getattr(module, trainer_class)
-
-    model = hydra.utils.instantiate(config.model)
-    logging_tool = et.load_logging_tool(config=config)
     trainer = class_.hydrate_trainer(config, loaders, model, logging_tool, optuna_trial=optuna_trial)
 
     return loaders, trainer, logging_tool
@@ -80,7 +96,6 @@ def _get_loaders_and_trainer(config, optuna_trial=None):
 def train(config: omegaconf.DictConfig, optuna_trial=None) -> object:
     # Convenient config setup: easier access to debug mode, etc.
     config: omegaconf.DictConfig = set_config(config)
-
     loaders, trainer, logging_tool = _get_loaders_and_trainer(config, optuna_trial)
 
     best_model_metrics, best_model_test_metrics = None, None
@@ -156,9 +171,6 @@ class Trainer():
 
     @classmethod
     def hydrate_trainer(cls, config: omegaconf.DictConfig, loaders, model, logging_tool, optuna_trial=None) -> T:
-        # Init model
-        logger.info(f'Instantiating model <{config.model._target_}>')
-
         # Init optimizer
         optimizer = hydra.utils.instantiate(config.optim, model.parameters())
         if "steps_per_epoch" in config.scheduler:
@@ -183,35 +195,40 @@ class Trainer():
         start = time.time()
         for i, data in enumerate(train_loader):
             self.optimizer.zero_grad()
-            x = data['x'].to(self.device)
-            y = data['y'].to(self.device)
-            yaw = data['yaw'].to(self.device)
-            _check_any_nan(x)
-            _check_any_nan(y)
+            img_batch = data['img'].to(self.device)  # (B, 3, 640, 832)
+            annotations = data['annot'].to(self.device)  # (B, 1, 5) TODO 왜 모두 -1로 채워져있지?
+            _check_any_nan(img_batch)
+            _check_any_nan(annotations)
 
             # forward propagation
             with torch.autocast(device_type=self.device.type, enabled=self.use_amp):
-                logits = self.model(x, yaw)
-                loss = self.criterion(logits, y)["hybrid"]
+                classification, regression, anchors = self.model(img_batch)
+                classification_loss, regression_loss = self.criterion(classification, regression, anchors, annotations)
+                classification_loss = classification_loss.mean()
+                regression_loss = regression_loss.mean()
+                loss = classification_loss + regression_loss
                 train_losses.append(loss.detach())
 
+            if bool(loss == 0):
+                    continue
+            
             # set trace for checking nan values
-            if torch.any(torch.isnan(loss)):
-                import pdb
-                pdb.set_trace()
-                is_param_nan = torch.stack([torch.isnan(p).any() for p in self.model.parameters()]).any()
-                continue
+            # if torch.any(torch.isnan(loss)):
+            #     import pdb
+            #     pdb.set_trace()
+            #     is_param_nan = torch.stack([torch.isnan(p).any() for p in self.model.parameters()]).any()
+            #     continue
 
             # Backpropagation
             if self.use_amp:
                 self.scaler.scale(loss).backward()
                 self.scaler.unscale_(self.optimizer)
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
                 self.scaler.step(self.optimizer)
                 self.scaler.update()
             else:
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.1)
                 self.optimizer.step()
 
             if i % self.log_every_n_steps == 0:
@@ -250,35 +267,22 @@ class Trainer():
         return losses.detach(), result_dict
 
     def _inference(self, loader):
-        list_logits = []
-        list_annots = []
+        losses = []
 
         for data in tqdm.tqdm(loader):
-            x = data['x'].to(self.device)
-            y = data['y'].to(self.device)
-            yaw = data['yaw'].to(self.device)
-            _check_any_nan(x)
+            img_batch = data['img'].to(self.device)  # (B, 3, 640, 832)
+            annotations = data['annot'].to(self.device)  # (B, 1, 5) TODO 왜 모두 -1로 채워져있지?
+            _check_any_nan(img_batch)
+            _check_any_nan(annotations)
             
-            if loader.dataset.test_input_length == loader.dataset.window_length:
-                logits = self.model(x, yaw)
-            else:
-                _interval = loader.dataset.window_length // 2
-                _num_windowing = 1 + int(np.ceil((x.size(3) - loader.dataset.window_length) / _interval))
-                _expected_size = loader.dataset.window_length + int(np.ceil((x.size(3) - loader.dataset.window_length) / _interval)) * _interval
-                diff_t = _expected_size - loader.dataset.test_input_length
-                x_padded = F.pad(x, [0, diff_t, 0, 0])
-                logits = torch.zeros((x.size(0), 1, len(C.PREDICT_COLS), x.size(3))).to(self.device)
-                counters = torch.zeros((x.size(0), 1, len(C.PREDICT_COLS), x.size(3))).to(self.device)
-                for i in range(_num_windowing):
-                    start_index = i * _interval
-                    end_index = start_index + loader.dataset.window_length 
-                    logits_padded = self.model(x_padded[:, :, :, start_index: end_index], yaw)
-                    logits[:, :, :, start_index: end_index] = logits_padded
-                    counters[:, :, :, start_index: end_index] += 1
-                logits = (logits / counters)[:, :, :, :x.size(3)]
-
-            list_logits.append(logits)
-            list_annots.append(y)
+            # forward propagation
+            with torch.autocast(device_type=self.device.type, enabled=self.use_amp):
+                classification, regression, anchors = self.model(img_batch)
+                classification_loss, regression_loss = self.criterion(classification, regression, anchors, annotations)
+                classification_loss = classification_loss.mean()
+                regression_loss = regression_loss.mean()
+                loss = classification_loss + regression_loss
+                losses.append(loss.detach())
 
             if self.fast_dev_run:
                 # Runs 1 train batch and program ends if 'fast_dev_run' set to 'True'
@@ -286,16 +290,12 @@ class Trainer():
                 # FIXME: progress bar does not update when 'fast_dev_run==True'
                 break
 
-        preds = torch.vstack(list_logits)
-        annots = torch.vstack(list_annots)
-
-        return preds, annots
-
+        return torch.stack(losses).sum().item()
+    
     @torch.no_grad()
     def validate_epoch(self, epoch, val_loader) -> Metrics:
         self.model.eval()
-        preds, annots = self._inference(val_loader)
-        loss, dict_metrics = self.get_metrics(preds, annots)
+        loss = self._inference(val_loader)
         self.scheduler.step("epoch_val", loss)
 
         return Metrics(loss)
@@ -303,8 +303,7 @@ class Trainer():
     @torch.no_grad()
     def test_epoch(self, epoch, test_loader) -> Metrics:
         self.model.eval()
-        preds, annots = self._inference(test_loader)
-        loss, dict_metrics = self.get_metrics(preds, annots)
+        loss = self._inference(test_loader)
 
         return Metrics(loss)
 

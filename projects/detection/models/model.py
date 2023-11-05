@@ -1,117 +1,347 @@
-import math 
-
-import torch
 import torch.nn as nn
-import torch.nn.functional as F
+import torch
+import math
+import torch.utils.model_zoo as model_zoo
+from torchvision.ops import nms
+from projects.detection.models.modules import BasicBlock, Bottleneck, BBoxTransform, ClipBoxes
+from projects.detection.models.anchors import Anchors
+from projects.detection.criterions.losses import FocalLoss
 
-import projects.common.constants as C
-import projects.detection.models.modules as M
-    
+model_urls = {
+    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
+    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
+    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
+    'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
+    'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
+}
 
-class RailModel(nn.Module):
-    def __init__(self, in_planes, f_maps=32, num_levels=4, kernel=5, dilation=2, 
-                 rail_type="curved", window_length=2500, out_channels=4, **kwargs):
-        super(RailModel, self).__init__()
 
-        if isinstance(f_maps, int):
-            f_maps = [f_maps * 2 ** k for k in range(num_levels)]  # number_of_features_per_level
+class PyramidFeatures(nn.Module):
+    def __init__(self, C3_size, C4_size, C5_size, feature_size=256):
+        super(PyramidFeatures, self).__init__()
 
-        assert isinstance(f_maps, list) or isinstance(f_maps, tuple)
-        assert len(f_maps) > 1, "Required at least 2 levels in the U-Net"
+        # upsample C5 to get P5 from the FPN paper
+        self.P5_1 = nn.Conv2d(C5_size, feature_size, kernel_size=1, stride=1, padding=0)
+        self.P5_upsampled = nn.Upsample(scale_factor=2, mode='nearest')
+        self.P5_2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, stride=1, padding=1)
 
-        self.inplanes = in_planes
-        self.rail_type = rail_type
-        self.num_channels = C.NUM_CHANNEL_MAPPER[rail_type]
-        self.window_length = window_length
-        self.out_channels = out_channels
+        # add P5 elementwise to C4
+        self.P4_1 = nn.Conv2d(C4_size, feature_size, kernel_size=1, stride=1, padding=0)
+        self.P4_upsampled = nn.Upsample(scale_factor=2, mode='nearest')
+        self.P4_2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, stride=1, padding=1)
 
-        # conv block
-        self.rail_embedding = nn.Sequential(
-            nn.Conv2d(1, in_planes, kernel_size=(1, 5), stride=1, padding=(0, 2), bias=False),
-            nn.BatchNorm2d(in_planes),
-            nn.LeakyReLU(inplace=True),
-        )
+        # add P4 elementwise to C3
+        self.P3_1 = nn.Conv2d(C3_size, feature_size, kernel_size=1, stride=1, padding=0)
+        self.P3_2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, stride=1, padding=1)
 
-        # create encoders
-        dynamic_layers = []
-        cross_channel_layers = []
-        for idx, f in enumerate(f_maps):
+        # "P6 is obtained via a 3x3 stride-2 conv on C5"
+        self.P6 = nn.Conv2d(C5_size, feature_size, kernel_size=3, stride=2, padding=1)
 
-            if idx == 0 :
-                _kernel = (1, kernel)
-                _stride = (1, 1)
-                _dilation = (1, 1)
-                _padding = (0, _kernel[-1]//2)
-            else :
-                _kernel = (1, kernel)
-                _stride = (1, 2)
-                _dilation = (1, dilation)
-                _padding = (0, kernel//2 * dilation)
-                
-            dynamic_layers.append(M.ResidualBlock(inplanes=self.inplanes, 
-                                                  planes=f, kernel_size=_kernel, stride=_stride, 
-                                                  dilation=_dilation, padding=_padding, flag_res=True))
-            cross_channel_layers.append(nn.Sequential(
-                M.ResidualBlock(inplanes=f, planes=f * self.out_channels, kernel_size=(self.num_channels, 1), stride=1, dilation=1, padding=0, flag_res=True),
-            ))
-            self.inplanes = f
-        self.time_encoder = nn.ModuleList(dynamic_layers)
-        self.channel_encoder = nn.ModuleList(cross_channel_layers)
+        # "P7 is computed by applying ReLU followed by a 3x3 stride-2 conv on P6"
+        self.P7_1 = nn.ReLU()
+        self.P7_2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, stride=2, padding=1)
 
-        # catch dependency between [y, t'] (e.g., [4, 125])
-        self.embedding = M.EmbeddingBlock(d_model=f_maps[-1], max_seq_len=self.window_length)
-        self.global_encoder = M.MultiHeadSelfAttention(n_featuremap=f_maps[-1], n_heads=1,  d_k=f_maps[-1] // 2)
+    def forward(self, inputs):
+        C3, C4, C5 = inputs
 
-        # create decoders
-        fusion_layers = []
-        r_f_maps = [f for f in f_maps[::-1]]
-        for f_l, f_h in zip(r_f_maps[1:], r_f_maps[:-1]):
-            fusion_layers.append(M.FusionBlock(f_l + f_h, f_l))
-        self.decoders = nn.ModuleList(fusion_layers)
+        P5_x = self.P5_1(C5)
+        P5_upsampled_x = self.P5_upsampled(P5_x)
+        P5_x = self.P5_2(P5_x)
 
-        # classifier
-        self.classifier = M.Classifier(f_maps[0])
+        P4_x = self.P4_1(C4)
+        P4_x = P5_upsampled_x + P4_x
+        P4_upsampled_x = self.P4_upsampled(P4_x)
+        P4_x = self.P4_2(P4_x)
+
+        P3_x = self.P3_1(C3)
+        P3_x = P3_x + P4_upsampled_x
+        P3_x = self.P3_2(P3_x)
+
+        P6_x = self.P6(C5)
+
+        P7_x = self.P7_1(P6_x)
+        P7_x = self.P7_2(P7_x)
+
+        return [P3_x, P4_x, P5_x, P6_x, P7_x]
+
+
+class RegressionModel(nn.Module):
+    def __init__(self, num_features_in, num_anchors=9, feature_size=256):
+        super(RegressionModel, self).__init__()
+
+        self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
+        self.act1 = nn.ReLU()
+
+        self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+        self.act2 = nn.ReLU()
+
+        self.conv3 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+        self.act3 = nn.ReLU()
+
+        self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+        self.act4 = nn.ReLU()
+
+        self.output = nn.Conv2d(feature_size, num_anchors * 4, kernel_size=3, padding=1)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.act1(out)
+
+        out = self.conv2(out)
+        out = self.act2(out)
+
+        out = self.conv3(out)
+        out = self.act3(out)
+
+        out = self.conv4(out)
+        out = self.act4(out)
+
+        out = self.output(out)
+
+        # out is B x C x W x H, with C = 4*num_anchors
+        out = out.permute(0, 2, 3, 1)
+
+        return out.contiguous().view(out.shape[0], -1, 4)
+
+
+class ClassificationModel(nn.Module):
+    def __init__(self, num_features_in, num_anchors=9, num_classes=80, prior=0.01, feature_size=256):
+        super(ClassificationModel, self).__init__()
+
+        self.num_classes = num_classes
+        self.num_anchors = num_anchors
+
+        self.conv1 = nn.Conv2d(num_features_in, feature_size, kernel_size=3, padding=1)
+        self.act1 = nn.ReLU()
+
+        self.conv2 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+        self.act2 = nn.ReLU()
+
+        self.conv3 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+        self.act3 = nn.ReLU()
+
+        self.conv4 = nn.Conv2d(feature_size, feature_size, kernel_size=3, padding=1)
+        self.act4 = nn.ReLU()
+
+        self.output = nn.Conv2d(feature_size, num_anchors * num_classes, kernel_size=3, padding=1)
+        self.output_act = nn.Sigmoid()
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.act1(out)
+
+        out = self.conv2(out)
+        out = self.act2(out)
+
+        out = self.conv3(out)
+        out = self.act3(out)
+
+        out = self.conv4(out)
+        out = self.act4(out)
+
+        out = self.output(out)
+        out = self.output_act(out)
+
+        # out is B x C x W x H, with C = n_classes + n_anchors
+        out1 = out.permute(0, 2, 3, 1)
+
+        batch_size, width, height, channels = out1.shape
+
+        out2 = out1.view(batch_size, width, height, self.num_anchors, self.num_classes)
+
+        return out2.contiguous().view(x.shape[0], -1, self.num_classes)
+
+
+class ResNet(nn.Module):
+
+    def __init__(self, num_classes, block, layers):
+        self.inplanes = 64
+        super(ResNet, self).__init__()
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        self.relu = nn.ReLU(inplace=True)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        self.layer1 = self._make_layer(block, 64, layers[0])
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
+
+        if block == BasicBlock:
+            fpn_sizes = [self.layer2[layers[1] - 1].conv2.out_channels, self.layer3[layers[2] - 1].conv2.out_channels,
+                         self.layer4[layers[3] - 1].conv2.out_channels]
+        elif block == Bottleneck:
+            fpn_sizes = [self.layer2[layers[1] - 1].conv3.out_channels, self.layer3[layers[2] - 1].conv3.out_channels,
+                         self.layer4[layers[3] - 1].conv3.out_channels]
+        else:
+            raise ValueError(f"Block type {block} not understood")
+
+        self.fpn = PyramidFeatures(fpn_sizes[0], fpn_sizes[1], fpn_sizes[2])
+
+        self.regressionModel = RegressionModel(256)
+        self.classificationModel = ClassificationModel(256, num_classes=num_classes)
+
+        self.anchors = Anchors()
+
+        self.regressBoxes = BBoxTransform()
+
+        self.clipBoxes = ClipBoxes()
+
+        self.focalLoss = FocalLoss()
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-                    
-    def forward(self, x: torch.Tensor, yaw: torch.Tensor = None):
-        # embedding
-        x = self.rail_embedding(x)  # torch.Size([4, 16, 37, 2000])
-        
-        # encoder part
-        """
-        torch.Size([4, 32, 4, 500])
-        torch.Size([4, 64, 4, 250])
-        torch.Size([4, 128, 4, 125])
-        torch.Size([4, 256, 4, 63])
-        torch.Size([4, 512, 4, 32])
+                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+                m.weight.data.normal_(0, math.sqrt(2. / n))
+            elif isinstance(m, nn.BatchNorm2d):
+                m.weight.data.fill_(1)
+                m.bias.data.zero_()
 
-        torch.Size([4, 32, 4, 200])
-        torch.Size([4, 64, 4, 100])
-        torch.Size([4, 128, 4, 50])
-        torch.Size([4, 256, 4, 25])
-        """
-        c_encoders_features = []
-        for t_encoder, c_encoder in zip(self.time_encoder, self.channel_encoder):
-            x = t_encoder(x)  
-            x_c = c_encoder(x)  
-            x_c = x_c.view(x_c.shape[0], x_c.shape[1] // self.out_channels, self.out_channels, x_c.shape[3])  
-            c_encoders_features.insert(0, x_c)
+        prior = 0.01
 
-        # prepare inputs for decoder
-        x_c = self.embedding(x_c, yaw)
-        x_c = self.global_encoder(x_c)  # B, 256, 4, 125
-        c_encoders_features = c_encoders_features[1:]
+        self.classificationModel.output.weight.data.fill_(0)
+        self.classificationModel.output.bias.data.fill_(-math.log((1.0 - prior) / prior))
 
-        # decoder part
-        for decoder, encoder_feature in zip(self.decoders, c_encoders_features):
-            x_c = decoder(encoder_feature, x_c)
+        self.regressionModel.output.weight.data.fill_(0)
+        self.regressionModel.output.bias.data.fill_(0)
 
-        # classifier
-        x_c = self.classifier(x_c)
+        self.freeze_bn()
 
-        return x_c
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * block.expansion:
+            downsample = nn.Sequential(
+                nn.Conv2d(self.inplanes, planes * block.expansion,
+                          kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = [block(self.inplanes, planes, stride, downsample)]
+        self.inplanes = planes * block.expansion
+        for i in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
+
+    def freeze_bn(self):
+        '''Freeze BatchNorm layers.'''
+        for layer in self.modules():
+            if isinstance(layer, nn.BatchNorm2d):
+                layer.eval()
+
+    def forward(self, inputs):
+
+        img_batch = inputs
+
+        x = self.conv1(img_batch)
+        x = self.bn1(x)
+        x = self.relu(x)
+        x = self.maxpool(x)
+
+        x1 = self.layer1(x)
+        x2 = self.layer2(x1)
+        x3 = self.layer3(x2)
+        x4 = self.layer4(x3)
+
+        features = self.fpn([x2, x3, x4])
+
+        regression = torch.cat([self.regressionModel(feature) for feature in features], dim=1)
+
+        classification = torch.cat([self.classificationModel(feature) for feature in features], dim=1)
+
+        anchors = self.anchors(img_batch)
+
+        return classification, regression, anchors
+    
+        # transformed_anchors = self.regressBoxes(anchors, regression)
+        # transformed_anchors = self.clipBoxes(transformed_anchors, img_batch)
+
+        # finalResult = [[], [], []]
+
+        # finalScores = torch.Tensor([])
+        # finalAnchorBoxesIndexes = torch.Tensor([]).long()
+        # finalAnchorBoxesCoordinates = torch.Tensor([])
+
+        # if torch.cuda.is_available():
+        #     finalScores = finalScores.cuda()
+        #     finalAnchorBoxesIndexes = finalAnchorBoxesIndexes.cuda()
+        #     finalAnchorBoxesCoordinates = finalAnchorBoxesCoordinates.cuda()
+
+        # for i in range(classification.shape[2]):
+        #     scores = torch.squeeze(classification[:, :, i])
+        #     scores_over_thresh = (scores > 0.05)
+        #     if scores_over_thresh.sum() == 0:
+        #         # no boxes to NMS, just continue
+        #         continue
+
+        #     scores = scores[scores_over_thresh]
+        #     anchorBoxes = torch.squeeze(transformed_anchors)
+        #     anchorBoxes = anchorBoxes[scores_over_thresh]
+        #     anchors_nms_idx = nms(anchorBoxes, scores, 0.5)
+
+        #     finalResult[0].extend(scores[anchors_nms_idx])
+        #     finalResult[1].extend(torch.tensor([i] * anchors_nms_idx.shape[0]))
+        #     finalResult[2].extend(anchorBoxes[anchors_nms_idx])
+
+        #     finalScores = torch.cat((finalScores, scores[anchors_nms_idx]))
+        #     finalAnchorBoxesIndexesValue = torch.tensor([i] * anchors_nms_idx.shape[0])
+        #     if torch.cuda.is_available():
+        #         finalAnchorBoxesIndexesValue = finalAnchorBoxesIndexesValue.cuda()
+
+        #     finalAnchorBoxesIndexes = torch.cat((finalAnchorBoxesIndexes, finalAnchorBoxesIndexesValue))
+        #     finalAnchorBoxesCoordinates = torch.cat((finalAnchorBoxesCoordinates, anchorBoxes[anchors_nms_idx]))
+
+
+
+def resnet18(num_classes, pretrained=False, **kwargs):
+    """Constructs a ResNet-18 model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = ResNet(num_classes, BasicBlock, [2, 2, 2, 2], **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet18'], model_dir='.'), strict=False)
+    return model
+
+
+def resnet34(num_classes, pretrained=False, **kwargs):
+    """Constructs a ResNet-34 model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = ResNet(num_classes, BasicBlock, [3, 4, 6, 3], **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet34'], model_dir='.'), strict=False)
+    return model
+
+
+def resnet50(num_classes, pretrained=False, **kwargs):
+    """Constructs a ResNet-50 model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = ResNet(num_classes, Bottleneck, [3, 4, 6, 3], **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet50'], model_dir='.'), strict=False)
+    return model
+
+
+def resnet101(num_classes, pretrained=False, **kwargs):
+    """Constructs a ResNet-101 model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = ResNet(num_classes, Bottleneck, [3, 4, 23, 3], **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet101'], model_dir='.'), strict=False)
+    return model
+
+
+def resnet152(num_classes, pretrained=False, **kwargs):
+    """Constructs a ResNet-152 model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = ResNet(num_classes, Bottleneck, [3, 8, 36, 3], **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet152'], model_dir='.'), strict=False)
+    return model

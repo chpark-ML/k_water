@@ -16,8 +16,8 @@ import projects.common.constants as C
 import projects.detection.utils.model_path as MP
 from projects.detection.train import _get_loaders_and_trainer
 from projects.common.enums import RunMode
-from projects.common.utils import set_config
-from projects.common.utils import (
+from projects.detection.utils import set_config
+from projects.detection.utils import (
     get_binary_classification_metrics, _seed_everything, print_config, set_config, get_torch_device_string)
 
 logging.basicConfig(level=logging.INFO)

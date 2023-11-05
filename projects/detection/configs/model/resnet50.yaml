@@ -1,0 +1,4 @@
+target_function: projects.detection.models.model.resnet50
+
+num_classes: 8
+pretrained: True

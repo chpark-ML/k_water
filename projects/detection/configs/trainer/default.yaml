@@ -1,7 +1,7 @@
 _target_: projects.detection.train.Trainer
 
 gpus: auto
-max_epoch: 200
+max_epoch: 50
 test_epoch_start: ${trainer.max_epoch}
 fast_dev_run: False
 early_stop_patience: null

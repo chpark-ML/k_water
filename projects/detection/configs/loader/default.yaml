@@ -8,14 +8,6 @@ dataset:
     val_fold: [ 8 ]
     test_fold: [ 9 ]
     dataset_size_scale_factor: 1.0
-  augmentation:
-    gaussian_smoothing:
-      p: 0.5
-      mode: uniform
-      min_sigma: 0.001
-      max_sigma: 0.1
-      sigma_normal_scale: 2.0
-
 batch_size: 4
 num_workers: 0
 pin_memory: True

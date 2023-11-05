@@ -12,7 +12,7 @@ import omegaconf
 import pandas as pd
 from pathlib import Path
 
-from projects.detection.utils import utils
+from projects.detection import utils
 
 logger = logging.getLogger(__name__)
 

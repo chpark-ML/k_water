@@ -18,12 +18,13 @@ from rich.style import Style
 from sklearn import metrics
 from torch.utils.data.distributed import DistributedSampler
 
-import projects.common.experiment_tool as et
+import projects.detection.experiment_tool as et
 from projects.common.enums import RunMode
 
 
 _THIS_DIR = os.path.dirname(os.path.realpath(__file__))
-_DEFAULT_CONFIG_FILE = os.path.join(_THIS_DIR, '..', 'configs', 'config.yaml')
+_DEFAULT_CONFIG_FILE = os.path.join(_THIS_DIR, 'configs', 'config.yaml')
+
 logger = logging.getLogger(__name__)
 
 
@@ -115,26 +116,6 @@ def print_config(config: DictConfig,
 def _get_available_gpu():
     device_ids = GPUtil.getAvailable(order='memory', limit=1, maxLoad=0.5, maxMemory=0.5)
     return device_ids[0] if device_ids else 'cpu'
-
-
-def get_binary_classification_metrics(prob: dict, annot: dict, threshold: dict):
-    assert type(prob) == type(annot)
-    result_dict = dict()
-    target_attr = list(prob.keys())
-    for i_attr in target_attr:
-        result_dict[f'acc_{i_attr}'] = metrics.accuracy_score(annot[i_attr].squeeze().cpu().numpy(),
-                                                              prob[i_attr].squeeze().cpu().numpy() > threshold[
-                                                                  f'youden_{i_attr}'])
-        try:
-            result_dict[f'auroc_{i_attr}'] = metrics.roc_auc_score(annot[i_attr].squeeze().cpu().numpy(),
-                                                                   prob[i_attr].squeeze().cpu().numpy())
-        except ValueError:  # in the case when only one class exists, AUROC can not be calculated. (in fast_dev_run)
-            pass
-        result_dict[f'f1_{i_attr}'] = metrics.f1_score(annot[i_attr].squeeze().cpu().numpy(),
-                                                       prob[i_attr].squeeze().cpu().numpy() > threshold[
-                                                           f'youden_{i_attr}'])
-
-    return result_dict
 
 
 def get_torch_device_string(gpus):
