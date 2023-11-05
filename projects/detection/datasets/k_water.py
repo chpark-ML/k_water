@@ -7,21 +7,15 @@ import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
-<<<<<<< HEAD
-=======
 from torch.utils.data.sampler import Sampler
->>>>>>> f9db848 (updates)
 from torchvision import transforms
 from pycocotools.coco import COCO
 from PIL import Image
 from omegaconf import OmegaConf
-<<<<<<< HEAD
-=======
 import skimage.io
 import skimage.transform
 import skimage.color
 import skimage
->>>>>>> f9db848 (updates)
 
 from projects.common.enums import RunMode
 import projects.common.constants as C
@@ -35,11 +29,7 @@ def _get_df(mode: RunMode, dataset_info: dict):
     assert (dataset_size_scale_factor > 0.) and (dataset_size_scale_factor <= 1.)
     
     # get dataframe for each dataset
-<<<<<<< HEAD
-    df = pd.read_csv("projects/database/image_info.csv")
-=======
     df = pd.read_csv(_CSV_FILE_PATH)
->>>>>>> f9db848 (updates)
 
     # get fold indices depending on the "mode"
     if mode == RunMode.TRAIN:
@@ -98,16 +88,6 @@ class KWATER(Dataset):
         self.dataset_info = dataset_info
         self.df_data = _get_df(self.mode, self.dataset_info)
         self.coco = COCO(C.TRAIN_DATA_ANNOT)
-<<<<<<< HEAD
-        self.cat_ids = self.coco.getCatIds() # category id 반환
-        self.cats = self.coco.loadCats(self.cat_ids) # category id를 입력으로 category name, super category 정보 담긴 dict 반환
-
-        self.transforms = Compose(transforms=[
-            transforms.ToPILImage(),
-            # transforms.Resize((256, 256)),
-            transforms.ToTensor(),
-            ])
-=======
         self.load_classes()
 
         if self.mode == RunMode.TRAIN:
@@ -115,7 +95,6 @@ class KWATER(Dataset):
         else:
             self.transforms = Compose(transforms=[Normalizer(), Resizer()])
 
->>>>>>> f9db848 (updates)
     
     def __len__(self):
         return len(self.df_data)
@@ -126,46 +105,6 @@ class KWATER(Dataset):
         """
         elem = self.df_data.iloc[index]
         image_id = elem['img_id']
-<<<<<<< HEAD
-        image_infos = self.coco.loadImgs(image_id)[0] # img id를 받아서 image info 반환
-        
-        # cv2 를 활용하여 image 불러오기(BGR -> RGB 변환 -> numpy array 변환 -> normalize(0~1))
-        images = cv2.imread(os.path.join(str(C.DATA_ROOT_PATH_TRAIN), image_infos['file_name']))
-        images = cv2.cvtColor(images, cv2.COLOR_BGR2RGB).astype(np.float32)
-        images /= 255.0 
-
-        # bounding boxes
-        ann_ids = self.coco.getAnnIds(imgIds=image_id)
-        annotations = self.coco.loadAnns(ann_ids)
-        num_objs = len(annotations)
-        boxes = []
-        for i in range(num_objs):
-            xmin = annotations[i]['bbox'][0]
-            ymin = annotations[i]['bbox'][1]
-            xmax = xmin + annotations[i]['bbox'][2]
-            ymax = ymin + annotations[i]['bbox'][3]
-            boxes.append([xmin, ymin, xmax, ymax])
-        boxes = torch.as_tensor(boxes, dtype=torch.float32)
-        
-        labels = torch.ones((num_objs,), dtype=torch.int64)
-        image_id = torch.tensor([image_id])
-        areas = []
-        for i in range(num_objs):
-            areas.append(annotations[i]['area'])
-        areas = torch.as_tensor(areas, dtype=torch.float32)
-        
-        # target in dictionary format
-        target = {}
-        target["image_id"] = image_id
-        target["boxes"] = boxes
-        target["labels"] = labels
-        target["area"] = areas
-
-        if self.transforms is not None:
-            images, target = self.transforms(images, target)
-
-        return images, target
-=======
 
         images = self.load_image(image_id)
         annotations = self.load_annotations(image_id)
@@ -372,4 +311,3 @@ class UnNormalizer(object):
         for t, m, s in zip(tensor, self.mean, self.std):
             t.mul_(s).add_(m)
         return tensor
->>>>>>> f9db848 (updates)
