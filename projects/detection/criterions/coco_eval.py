@@ -6,7 +6,7 @@ from projects.common.enums import RunMode
 import projects.common.constants as C
 
 
-def evaluate_coco(dataset, model, threshold=0.05):
+def evaluate_coco(dataset, model, threshold=0.05, device=None):
     model.eval()
     with torch.no_grad():
         # start collecting results
@@ -21,7 +21,9 @@ def evaluate_coco(dataset, model, threshold=0.05):
             img_path = elem['img_path']
 
             # run network
-            if torch.cuda.is_available():
+            if device:
+                scores, labels, boxes = model(data['img'].permute(2, 0, 1).to(device).unsqueeze(dim=0), mode="inference")
+            elif torch.cuda.is_available():
                 # input: (B, 3, 480, 640) / output: (B, 57600, 4), (B, 57600, 8), (B, 57600, 4)
                 scores, labels, boxes = model(data['img'].permute(2, 0, 1).cuda().float().unsqueeze(dim=0), mode="inference")  
             else:
@@ -51,18 +53,18 @@ def evaluate_coco(dataset, model, threshold=0.05):
                     # append detection for each positively labeled class
                     image_result = {
                         'id'          : box_id,
-                        'image_id'    : image_id,
+                        'image_id'    : int(image_id),
                         'category_id' : dataset.label_to_coco_label(label),
                         'segmentation': [],
-                        'area'        : 0,
+                        'area'        : int(0),
                         'bbox'        : box.tolist(),
-                        'iscrowd'     : 0,
+                        'iscrowd'     : int(0),
                         'attributes'  : {
                             "occluded": False,
                             "rotation": 0.0
                         }
                     }
-
+                    
                     # append detection to results
                     results.append(image_result)
 

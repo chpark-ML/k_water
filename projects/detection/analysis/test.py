@@ -13,12 +13,13 @@ import tqdm
 from omegaconf import DictConfig, OmegaConf
 
 import projects.common.constants as C
-import projects.detection.utils.model_path as MP
+import projects.detection.model_path as MP
+from projects.detection.datasets.k_water import collater
+from projects.detection.criterions.coco_eval import evaluate_coco
 from projects.detection.train import _get_loaders_and_trainer
 from projects.common.enums import RunMode
 from projects.detection.utils import set_config
-from projects.detection.utils import (
-    get_binary_classification_metrics, _seed_everything, print_config, set_config, get_torch_device_string)
+from projects.detection.utils import (_seed_everything, print_config, set_config, get_torch_device_string)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -35,94 +36,42 @@ def load_checkpoint(model, ckpt_path, device):
     return model
 
 
-def _inference(model, loader, device):
-    list_logits = []
-    list_annots = []
-    model.eval()
-
-    for data in tqdm.tqdm(loader):
-        x = data['x'].to(device)
-        y = data['y'].to(device)
-        yaw = data['yaw'].to(device)
-        
-        if loader.dataset.test_input_length == loader.dataset.window_length:
-            logits = model(x, yaw)
-        else:
-            _interval = loader.dataset.window_length // 2
-            _num_windowing = 1 + int(np.ceil((x.size(3) - loader.dataset.window_length) / _interval))
-            _expected_size = loader.dataset.window_length + int(np.ceil((x.size(3) - loader.dataset.window_length) / _interval)) * _interval
-            diff_t = _expected_size - loader.dataset.test_input_length
-            x_padded = F.pad(x, [0, diff_t, 0, 0])
-            logits = torch.zeros((x.size(0), 1, len(C.PREDICT_COLS), x.size(3)))
-            counters = torch.zeros((x.size(0), 1, len(C.PREDICT_COLS), x.size(3)))
-            for i in range(_num_windowing):
-                start_index = i * _interval
-                end_index = start_index + loader.dataset.window_length 
-                logits_padded = model(x_padded[:, :, :, start_index: end_index], yaw)
-                logits[:, :, :, start_index: end_index] = logits_padded
-                counters[:, :, :, start_index: end_index] += 1
-            logits = (logits / counters)[:, :, :, :x.size(3)]
-
-        list_logits.append(logits)
-        list_annots.append(y)
-
-    preds = torch.vstack(list_logits)
-    annots = torch.vstack(list_annots)
-
-    return preds, annots
-
-
 def main() -> None:
-    # load answer sheet
-    df_ans = pd.read_csv(C.ANSWER_SAMPLE)
-
     # checkpoint path
-    ckpts = MP.TARGET_MODEL_PATH
-
-    for rail in C.RAIL_TYPES:
-        ckpt_path = ckpts[rail] / Path("model.pth")
-        config_path = ckpts[rail] / Path(".hydra/config.yaml")
-        config = OmegaConf.load(config_path)
-        model = hydra.utils.instantiate(config.model)
-        
-
-        # gpus = 0
-        # torch_device = f'cuda:{gpus}'
-        torch_device = f'cpu'
-
-        if torch_device.startswith('cuda'):
-            cudnn.benchmark = False
-            cudnn.deterministic = True
-        
-        device = torch.device(torch_device)
-
-        model = load_checkpoint(model, ckpt_path, device)
-
-        run_modes = [RunMode('test')]
-        loaders = {mode: hydra.utils.instantiate(config.loader,
-                                                dataset={'mode': mode}, shuffle=(mode == RunMode.TRAIN),
-                                                drop_last=(mode == RunMode.TRAIN)) for mode in run_modes}
-        
-        preds, _ = _inference(model, loaders[RunMode.TEST], device)  # (B, 4, 2500)
-        
-        assert preds.size(0) == 5 or preds.size(0) == 10
-        if preds.size(0) == 10:
-            print('both type!')
-            for rail in C.RAIL_TYPES:
-                _preds = preds[C.RAIL_MAPPER[rail] * 5 : (C.RAIL_MAPPER[rail]+1) * 5]
-                for col in C.PREDICT_COLS:
-                    for yaw in C.YAW_TYPES:
-                        target_col = f'{col}_{rail[0]}{yaw}'
-                        df_ans.loc[:, target_col] = _preds[C.YAW_MAPPER[yaw], 0, C.PREDICT_COL_MAPPER[col], -len(df_ans):].detach().cpu().numpy()
-            break
-
-        else:
-            for col in C.PREDICT_COLS:
-                for yaw in C.YAW_TYPES:
-                    target_col = f'{col}_{rail[0]}{yaw}'
-                    df_ans.loc[:, target_col] = preds[C.YAW_MAPPER[yaw], 0, C.PREDICT_COL_MAPPER[col], -len(df_ans):].detach().cpu().numpy()
+    ckpt_path = MP.TARGET_MODEL_PATH / Path("model.pth")
+    config_path = MP.TARGET_MODEL_PATH / Path(".hydra/config.yaml")
+    config = OmegaConf.load(config_path)
     
-    df_ans.to_csv('/opt/railroad/projects/detection/analysis/result_test.csv', index=False)
+    if config.model.get('target_function') is not None:
+        logger.info(f'Instantiating model <{config.model.target_function}>')
+        target_function = hydra.utils.get_method(config.model.target_function)
+        config.model.pop('target_function')
+        config.model["pretrained"] = False
+        model = target_function(**config.model).cuda()
+    else:
+        logger.info(f'Instantiating model <{config.model._target_}>')
+        model = hydra.utils.instantiate(config.model)
+    
+    gpus = 0
+    torch_device = f'cuda:{gpus}'
+    # torch_device = f'cpu'
+
+    if torch_device.startswith('cuda'):
+        cudnn.benchmark = False
+        cudnn.deterministic = True
+    
+    device = torch.device(torch_device)
+    model = load_checkpoint(model, ckpt_path, device)
+
+    run_modes = [RunMode('test')]
+    datasets = {mode: hydra.utils.instantiate(config.loader.dataset, mode=mode) 
+                for mode in run_modes}
+    loaders = {mode: hydra.utils.instantiate(config.loader,
+                                             dataset=datasets[mode], 
+                                             collate_fn=collater,
+                                             shuffle=(mode == RunMode.TRAIN),
+                                             drop_last=(mode == RunMode.TRAIN)) for mode in run_modes}
+    evaluate_coco(loaders[RunMode.TEST].dataset, model, threshold=0.05, device=torch_device)
 
 if __name__ == '__main__':
     main()

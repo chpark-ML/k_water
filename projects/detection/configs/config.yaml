@@ -11,7 +11,7 @@ defaults:
   - trainer: default
   - loader: default
   - criterion: focal_loss
-  - model: resnet50
+  - model: resnet18
   - optim: adamw
   - scheduler: one_cycle_lr
   - experiment_tool: mlflow

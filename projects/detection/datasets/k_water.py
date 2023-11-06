@@ -97,6 +97,8 @@ class KWATER(Dataset):
                 'img_id': [int(image_path.stem.split('_')[-1]) for image_path in C.TEST_DATA_IMAGE], 
                 'img_path': C.TEST_DATA_IMAGE,
             })
+            self.coco = COCO(C.TRAIN_DATA_ANNOT)
+            self.load_classes()
 
 
         if self.mode == RunMode.TRAIN:

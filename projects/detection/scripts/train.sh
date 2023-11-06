@@ -1,7 +1,7 @@
 gpu_num=0
 cd /opt/kwater/projects/detection
 
-exp_name=baseline
+exp_name=resnet18
 
 HYDRA_FULL_ERROR=1 python3 main.py \
     experiment_tool.experiment_name=kwater-chpark \

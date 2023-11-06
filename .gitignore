@@ -182,3 +182,5 @@ cython_debug/
 
 # hydra outputs
 projects/*/outputs/*
+*.json
+*.pth
